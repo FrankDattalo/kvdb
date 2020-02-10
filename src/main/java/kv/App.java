@@ -33,11 +33,13 @@ public class App {
 
     Database database = null;
 
-    LoggerContext context = (LoggerContext) LogManager.getContext(false);
-    Configuration config = context.getConfiguration();
-    LoggerConfig rootConfig = config.getLoggerConfig(LogManager.ROOT_LOGGER_NAME);
-    rootConfig.setLevel(Level.TRACE);
-    context.updateLoggers();
+    if (args.length > 2 && args[2].equals("true")) {
+      LoggerContext context = (LoggerContext) LogManager.getContext(false);
+      Configuration config = context.getConfiguration();
+      LoggerConfig rootConfig = config.getLoggerConfig(LogManager.ROOT_LOGGER_NAME);
+      rootConfig.setLevel(Level.TRACE);
+      context.updateLoggers();
+    }
 
     try {
       log.trace("Initializing database");
