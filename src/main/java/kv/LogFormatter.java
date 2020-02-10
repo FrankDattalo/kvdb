@@ -37,16 +37,20 @@ public class LogFormatter {
     final int valueBytesLength = inputStream.readInt();
     final boolean tombstone = inputStream.readBoolean();
 
+    if (keyBytesLength < 0 || valueBytesLength < 0) {
+      throw new IOException("Array length is negative");
+    }
+
     final byte[] keyBytes = new byte[keyBytesLength];
 
     if (in.read(keyBytes) != keyBytesLength) {
-      throw new IOException("Unexpected EOF when reading key");
+      throw new EOFException("Unexpected EOF when reading key");
     }
 
     final byte[] valueBytes = new byte[valueBytesLength];
 
     if (in.read(valueBytes) != valueBytesLength) {
-      throw new IOException("Unexpected EOF when reading value");
+      throw new EOFException("Unexpected EOF when reading value");
     }
 
     writeLogEntry(crcBufferDataOutputStream, tombstone, keyBytes, valueBytes);

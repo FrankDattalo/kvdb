@@ -78,7 +78,9 @@ public class Database {
 
     log.trace("All segments closed");
 
-    this.compactorThread.join();
+    if (this.compactorThread != null) {
+      this.compactorThread.join();
+    }
   }
 
   public boolean read(byte[] key, OutputStream out) throws IOException {
@@ -196,14 +198,14 @@ public class Database {
         buffered.mark(MAX_READ_LIMIT);
 
         try {
+          log.trace("Reading entry from offset: {}", currentOffset);
+
           LogEntry entry = LogFormatter.readLogEntry(buffered);
           seg.put(entry.getKey(), currentOffset);
           currentOffset += entry.size();
 
         } catch (IOException e) {
-          if (!(e instanceof EOFException)) {
-            log.trace("Got exception while trying to recover entry, advancing one byte and trying again", e);
-          }
+          log.trace("Got exception while trying to recover entry, advancing one byte and trying again", e);
 
           buffered.reset();
 
