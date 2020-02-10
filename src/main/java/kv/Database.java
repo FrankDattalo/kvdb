@@ -48,6 +48,8 @@ public class Database {
 
       recover();
     }
+
+    this.makeNewSegment();
   }
 
   public void stop() {
@@ -115,7 +117,6 @@ public class Database {
       throw new IOException("Could not create base directory");
     }
 
-    this.makeNewSegment();
   }
 
   private void recover() throws IOException {
@@ -130,11 +131,10 @@ public class Database {
       recoverPath(path);
     }
 
-    this.makeNewSegment();
   }
 
   private static boolean isSegmentFileName(Path path) {
-    return Pattern.matches("seg-\\d\\.bin", path.getFileName().toString());
+    return Pattern.matches("seg-\\d+\\.bin", path.getFileName().toString());
   }
 
   private static int bySegmentId(Path path1, Path path2) {
@@ -200,6 +200,9 @@ public class Database {
       int id = this.currentSegmentId.incrementAndGet();
       Path path = Paths.get(this.dbBasePath, String.format("seg-%d.bin", id));
       String pathAsString = path.toString();
+
+      log.trace("Creating new segment at path: {}", pathAsString);
+
       File file = path.toFile();
 
       if (!file.createNewFile()) {
@@ -222,6 +225,8 @@ public class Database {
       Segment segment = currentSegment();
 
       if (segment.isAtCapacity()) {
+        log.trace("Current segment is at capacity, new segment will be created");
+        segment.close();
         this.makeNewSegment();
       }
 
@@ -239,5 +244,10 @@ public class Database {
     } finally {
       segmentLock.unlock();
     }
+  }
+
+  @Override
+  public String toString() {
+    return this.segments.toString();
   }
 }

@@ -24,6 +24,7 @@ public class App {
     System.out.println("  /read <key> - reads the given key");
     System.out.println("  /write <key> <value> - inserts / updates the given key");
     System.out.println("  /delete <key> - deletes the given key");
+    System.out.println("  /debug - prints the database contents");
     System.out.println("  /quit - quits the program");
   }
 
@@ -77,6 +78,9 @@ public class App {
 
           } else if (line.startsWith("/help")) {
             help();
+
+          } else if (line.startsWith("/debug")) {
+            System.out.println(database);
 
           } else {
             System.out.println("Invalid command: " + line);

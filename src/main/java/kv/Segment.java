@@ -6,9 +6,11 @@ import org.slf4j.LoggerFactory;
 import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 public class Segment {
 
@@ -86,5 +88,18 @@ public class Segment {
     if (fileOutputStream == null) {
       throw new IOException("File is closed, cannot write");
     }
+  }
+
+  @Override
+  public String toString() {
+    return this.offsets.entrySet()
+        .stream().map(Segment::entryToString)
+        .collect(Collectors.toList()).toString();
+  }
+
+  private static String entryToString(Map.Entry<ByteBuffer, Long> entry) {
+    return String.format("%s => %d",
+        Arrays.toString(entry.getKey().array()),
+        entry.getValue());
   }
 }

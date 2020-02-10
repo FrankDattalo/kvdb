@@ -57,7 +57,7 @@ public class LogFormatter {
       throw new CrcMismatchException();
     }
 
-    return new LogEntry(crc, true, keyBytes, valueBytes);
+    return new LogEntry(crc, tombstone, keyBytes, valueBytes);
   }
 
   public static boolean read(InputStream in, OutputStream out) throws IOException {
