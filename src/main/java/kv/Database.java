@@ -4,7 +4,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.*;
-import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -83,7 +82,7 @@ public class Database {
     }
   }
 
-  public boolean read(byte[] key, OutputStream out) throws IOException {
+  public boolean read(ByteSlice key, OutputStream out) throws IOException {
 
     log.trace("read({})", key);
 
@@ -113,7 +112,7 @@ public class Database {
     return false;
   }
 
-  public void write(byte[] key, InputStream value) throws IOException {
+  public void write(ByteSlice key, InputStream value) throws IOException {
 
     log.trace("write({})", key);
 
@@ -122,7 +121,7 @@ public class Database {
     this.checkSegment();
   }
 
-  public void delete(byte[] key) throws IOException {
+  public void delete(ByteSlice key) throws IOException {
     log.trace("delete({})", key);
 
     Segment seg = this.currentSegment();
@@ -201,7 +200,7 @@ public class Database {
           log.trace("Reading entry from offset: {}", currentOffset);
 
           LogEntry entry = LogFormatter.readLogEntry(buffered);
-          seg.put(entry.getKey(), currentOffset);
+          seg.put(new ByteSlice(entry.getKey()), currentOffset);
           currentOffset += entry.size();
 
         } catch (IOException e) {
@@ -303,7 +302,7 @@ public class Database {
     }
 
     private void doCompaction() throws IOException {
-      Map<ByteBuffer, Segment> mostRecentSegment = new HashMap<>();
+      Map<ByteSlice, Segment> mostRecentSegment = new HashMap<>();
       int maxSegmentId = 0;
 
       List<Path> segmentPaths = listSegments();
@@ -320,7 +319,7 @@ public class Database {
         Segment segment = recoverPath(segmentPath);
         maxSegmentId = Math.max(maxSegmentId, segment.getId());
 
-        for (ByteBuffer key : segment.keys()) {
+        for (ByteSlice key : segment.keys()) {
           mostRecentSegment.put(key, segment);
         }
       }
@@ -329,8 +328,8 @@ public class Database {
       Path path = Paths.get(dbBasePath, String.format("compact%d-%d.bin", timestamp, maxSegmentId));
       Segment segment = createOpenSegmentFromPath(path);
 
-      for (Map.Entry<ByteBuffer, Segment> entry : mostRecentSegment.entrySet()) {
-        byte[] key = entry.getKey().array();
+      for (Map.Entry<ByteSlice, Segment> entry : mostRecentSegment.entrySet()) {
+        ByteSlice key = entry.getKey();
         Segment original = entry.getValue();
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();

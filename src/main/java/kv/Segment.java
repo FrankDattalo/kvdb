@@ -4,7 +4,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.*;
-import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
@@ -16,7 +15,7 @@ public class Segment {
 
   private static final Logger log = LoggerFactory.getLogger(Segment.class);
 
-  private final Map<ByteBuffer, Long> offsets = Collections.synchronizedMap(new HashMap<>());
+  private final Map<ByteSlice, Long> offsets = Collections.synchronizedMap(new HashMap<>());
   private final String filePath;
   private final FileOutputStream fileOutputStream;
   private final int id;
@@ -34,26 +33,26 @@ public class Segment {
     this.resizeAtBytes = resizeAtBytes;
   }
 
-  public Iterable<ByteBuffer> keys() {
+  public Iterable<ByteSlice> keys() {
     return this.offsets.keySet();
   }
 
-  public void put(byte[] key, long offset) {
-    offsets.put(ByteBuffer.wrap(key), offset);
+  public void put(ByteSlice key, long offset) {
+    offsets.put(key, offset);
     log.trace("Updating offset of {} to {}", key, offset);
   }
 
-  public void write(byte[] key, InputStream value) throws IOException {
+  public void write(ByteSlice key, InputStream value) throws IOException {
 
     checkWrite();
 
     long currentOffset = fileOutputStream.getChannel().position();
-    LogFormatter.write(fileOutputStream, new ByteArrayInputStream(key), value);
+    LogFormatter.write(fileOutputStream, key.toStream(), value);
     put(key, currentOffset);
   }
 
-  public boolean read(byte[] key, OutputStream out) throws IOException {
-    long position = this.offsets.get(ByteBuffer.wrap(key));
+  public boolean read(ByteSlice key, OutputStream out) throws IOException {
+    long position = this.offsets.get(key);
 
     try (RandomAccessFile randomAccessFile = new RandomAccessFile(this.filePath, "r")) {
 
@@ -70,7 +69,7 @@ public class Segment {
     }
   }
 
-  public void delete(byte[] key) throws IOException {
+  public void delete(ByteSlice key) throws IOException {
     write(key, null);
   }
 
@@ -86,8 +85,8 @@ public class Segment {
     }
   }
 
-  public boolean contains(byte[] key) {
-    return offsets.containsKey(ByteBuffer.wrap(key));
+  public boolean contains(ByteSlice key) {
+    return offsets.containsKey(key);
   }
 
   public boolean isAtCapacity() throws IOException {
@@ -128,14 +127,14 @@ public class Segment {
         .collect(Collectors.toList()).toString();
   }
 
-  private String entryToString(Map.Entry<ByteBuffer, Long> entry) {
+  private String entryToString(Map.Entry<ByteSlice, Long> entry) {
     try {
-      byte[] key = entry.getKey().array();
+      ByteSlice key = entry.getKey();
       ByteArrayOutputStream out = new ByteArrayOutputStream();
       boolean found = this.read(key, out);
 
       return String.format("%s => %s",
-          new String(key, StandardCharsets.UTF_8),
+          new String(key.copyData(), StandardCharsets.UTF_8),
           found ? new String(out.toByteArray(), StandardCharsets.UTF_8) : "<tombstone>");
 
     } catch (IOException e) {

@@ -64,7 +64,7 @@ public class App {
           if (line.startsWith("/read")) {
             String key = line.substring("/read".length()).trim();
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            boolean found = database.read(key.getBytes(), out);
+            boolean found = database.read(new ByteSlice(key.getBytes()), out);
             System.out.println(found ? new String(out.toByteArray()) : "<Not Found>");
 
           } else if (line.startsWith("/write")) {
@@ -72,11 +72,12 @@ public class App {
             int firstSpace = rest.indexOf(' ');
             String key = rest.substring(0, firstSpace).trim();
             String value = rest.substring(firstSpace).trim();
-            database.write(key.getBytes(), new ByteArrayInputStream(value.getBytes()));
+            database.write(new ByteSlice(key.getBytes()),
+                new ByteArrayInputStream(value.getBytes()));
 
           } else if (line.startsWith("/delete")) {
             String key = line.substring("/delete".length()).trim();
-            database.delete(key.getBytes());
+            database.delete(new ByteSlice(key.getBytes()));
 
           } else if (line.startsWith("/help")) {
             help();
