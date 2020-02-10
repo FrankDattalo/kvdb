@@ -6,7 +6,7 @@ import org.slf4j.LoggerFactory;
 import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
-import java.util.Arrays;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -19,12 +19,23 @@ public class Segment {
   private final Map<ByteBuffer, Long> offsets = Collections.synchronizedMap(new HashMap<>());
   private final String filePath;
   private final FileOutputStream fileOutputStream;
+  private final int id;
+  private final boolean compacted;
   private final long resizeAtBytes;
 
-  public Segment(String filePath, FileOutputStream fileOutputStream, long resizeAtBytes) {
+  public Segment(
+      String filePath, FileOutputStream fileOutputStream,
+      int id, boolean compacted, long resizeAtBytes) {
+
     this.filePath = filePath;
     this.fileOutputStream = fileOutputStream;
+    this.id = id;
+    this.compacted = compacted;
     this.resizeAtBytes = resizeAtBytes;
+  }
+
+  public Iterable<ByteBuffer> keys() {
+    return this.offsets.keySet();
   }
 
   public void put(byte[] key, long offset) {
@@ -63,6 +74,18 @@ public class Segment {
     write(key, null);
   }
 
+  public void deleteFile() throws IOException {
+    log.trace("deleteFile()");
+
+    this.close();
+
+    File file = new File(filePath);
+
+    if (!file.delete()) {
+      throw new IOException("Could not delete segment: " + filePath);
+    }
+  }
+
   public boolean contains(byte[] key) {
     return offsets.containsKey(ByteBuffer.wrap(key));
   }
@@ -73,6 +96,14 @@ public class Segment {
     checkWrite();
 
     return this.fileOutputStream.getChannel().size() >= this.resizeAtBytes;
+  }
+
+  public int getId() {
+    return this.id;
+  }
+
+  public boolean isCompacted() {
+    return compacted;
   }
 
   public void close() throws IOException {
@@ -93,13 +124,22 @@ public class Segment {
   @Override
   public String toString() {
     return this.offsets.entrySet()
-        .stream().map(Segment::entryToString)
+        .stream().map(this::entryToString)
         .collect(Collectors.toList()).toString();
   }
 
-  private static String entryToString(Map.Entry<ByteBuffer, Long> entry) {
-    return String.format("%s => %d",
-        Arrays.toString(entry.getKey().array()),
-        entry.getValue());
+  private String entryToString(Map.Entry<ByteBuffer, Long> entry) {
+    try {
+      byte[] key = entry.getKey().array();
+      ByteArrayOutputStream out = new ByteArrayOutputStream();
+      boolean found = this.read(key, out);
+
+      return String.format("%s => %s",
+          new String(key, StandardCharsets.UTF_8),
+          found ? new String(out.toByteArray(), StandardCharsets.UTF_8) : "<tombstone>");
+
+    } catch (IOException e) {
+      return "IOException";
+    }
   }
 }

@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.*;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -29,6 +30,13 @@ public class Database {
   // ~100 mb, this should never really be hit
   private static final int MAX_READ_LIMIT = 1000 * 1000 * 100;
 
+  // every .5 seconds
+  private static final int COMPACTION_INTERVAL_MS = 500;
+
+  private boolean shutdown;
+  private Thread compactorThread;
+
+
   public Database(String dbBasePath, long initialSegmentSize) {
     this.dbBasePath = dbBasePath;
     this.initialSegmentSize = initialSegmentSize;
@@ -50,10 +58,15 @@ public class Database {
     }
 
     this.makeNewSegment();
+
+    compactorThread = new Thread(new Compactor());
+    compactorThread.start();
   }
 
-  public void stop() {
+  public void stop() throws InterruptedException {
     log.trace("Stopping database");
+
+    this.shutdown = true;
 
     for (Segment seg : this.segments.values()) {
       try {
@@ -64,6 +77,8 @@ public class Database {
     }
 
     log.trace("All segments closed");
+
+    this.compactorThread.join();
   }
 
   public boolean read(byte[] key, OutputStream out) throws IOException {
@@ -79,6 +94,10 @@ public class Database {
 
       if (seg == null || !seg.contains(key)) {
         log.trace("Not found in segment: {}", segmentId);
+
+        if (seg != null && seg.isCompacted()) {
+          break;
+        }
 
         segmentId--;
         continue;
@@ -119,22 +138,28 @@ public class Database {
 
   }
 
-  private void recover() throws IOException {
-    List<Path> paths = Files.list(Paths.get(this.dbBasePath))
+  private List<Path> listSegments() throws IOException {
+    return Files.list(Paths.get(this.dbBasePath))
         .filter(Database::isSegmentFileName)
         .sorted(Database::bySegmentId)
         .collect(Collectors.toList());
+  }
+
+  private void recover() throws IOException {
+    List<Path> paths = listSegments();
 
     log.trace("Paths to recover: {}", paths);
 
     for (Path path : paths) {
-      recoverPath(path);
+      Segment seg = recoverPath(path);
+      this.currentSegmentId.set(Math.max(seg.getId(), this.currentSegmentId.get()));
+      this.segments.put(seg.getId(), seg);
     }
 
   }
 
   private static boolean isSegmentFileName(Path path) {
-    return Pattern.matches("seg-\\d+\\.bin", path.getFileName().toString());
+    return Pattern.matches("(seg|compact)(\\d+)?-\\d+\\.bin", path.getFileName().toString());
   }
 
   private static int bySegmentId(Path path1, Path path2) {
@@ -148,17 +173,17 @@ public class Database {
     return Integer.parseInt(fileName.substring(slashIndex + 1, dotIndex));
   }
 
-  private void recoverPath(Path path) throws IOException {
+  private static boolean isCompacted(Path path) {
+    return path.getFileName().toFile().toString().contains("compact");
+  }
+
+  private Segment recoverPath(Path path) throws IOException {
     log.trace("Recovering path: {}", path);
 
     String pathAsString = path.toString();
     int segmentId = extractSegmentId(path);
 
-    this.currentSegmentId.set(Math.max(segmentId, this.currentSegmentId.get()));
-
-    Segment seg = new Segment(pathAsString, null, 0);
-
-    this.segments.put(segmentId, seg);
+    Segment seg = new Segment(pathAsString, null, segmentId, isCompacted(path), 0);
 
     File file = path.toFile();
 
@@ -191,6 +216,26 @@ public class Database {
         }
       }
     }
+
+    return seg;
+  }
+
+  private Segment createOpenSegmentFromPath(Path path) throws IOException {
+    String pathAsString = path.toString();
+    log.trace("Creating new segment at path: {}", pathAsString);
+
+    File file = path.toFile();
+
+    if (!file.createNewFile()) {
+      throw new IOException("Expected new segment to not exist");
+    }
+
+    FileOutputStream fileOutputStream = new FileOutputStream(file, true);
+
+    Segment seg = new Segment(pathAsString, fileOutputStream,
+        extractSegmentId(path), isCompacted(path), initialSegmentSize);
+
+    return seg;
   }
 
   private void makeNewSegment() throws IOException {
@@ -199,19 +244,9 @@ public class Database {
 
       int id = this.currentSegmentId.incrementAndGet();
       Path path = Paths.get(this.dbBasePath, String.format("seg-%d.bin", id));
-      String pathAsString = path.toString();
+      Segment segment = createOpenSegmentFromPath(path);
 
-      log.trace("Creating new segment at path: {}", pathAsString);
-
-      File file = path.toFile();
-
-      if (!file.createNewFile()) {
-        throw new IOException("Expected new segment to not exist");
-      }
-
-      FileOutputStream fileOutputStream = new FileOutputStream(file, true);
-      Segment seg = new Segment(pathAsString, fileOutputStream, initialSegmentSize);
-      this.segments.put(id, seg);
+      this.segments.put(id, segment);
 
     } finally {
       segmentLock.unlock();
@@ -250,4 +285,87 @@ public class Database {
   public String toString() {
     return this.segments.toString();
   }
+
+  private class Compactor implements Runnable {
+    @Override
+    public void run() {
+      while (!shutdown) {
+        try {
+          doCompaction();
+          Thread.sleep(COMPACTION_INTERVAL_MS);
+
+        } catch (Exception e) {
+          log.error("Error in compaction", e);
+        }
+      }
+    }
+
+    private void doCompaction() throws IOException {
+      Map<ByteBuffer, Segment> mostRecentSegment = new HashMap<>();
+      int maxSegmentId = 0;
+
+      List<Path> segmentPaths = listSegments();
+
+      segmentPaths = segmentPaths.subList(0, segmentPaths.size() - 1);
+
+      if (segmentPaths.size() <= 1) {
+        return;
+      }
+
+      log.trace("Beginning compaction of: {}", segmentPaths);
+
+      for (Path segmentPath : segmentPaths) {
+        Segment segment = recoverPath(segmentPath);
+        maxSegmentId = Math.max(maxSegmentId, segment.getId());
+
+        for (ByteBuffer key : segment.keys()) {
+          mostRecentSegment.put(key, segment);
+        }
+      }
+
+      long timestamp = System.currentTimeMillis();
+      Path path = Paths.get(dbBasePath, String.format("compact%d-%d.bin", timestamp, maxSegmentId));
+      Segment segment = createOpenSegmentFromPath(path);
+
+      for (Map.Entry<ByteBuffer, Segment> entry : mostRecentSegment.entrySet()) {
+        byte[] key = entry.getKey().array();
+        Segment original = entry.getValue();
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        boolean found = original.read(key, out);
+
+        if (found) {
+          ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
+          segment.write(key, in);
+
+        } else {
+          segment.delete(key);
+        }
+      }
+
+      segment.close();
+
+      segments.put(segment.getId(), segment);
+
+      int toRemove = segment.getId() - 1;
+
+      while (toRemove > 0) {
+        Segment original = segments.get(toRemove);
+        segments.remove(toRemove);
+
+        if (original != null) {
+          original.deleteFile();
+        }
+
+        toRemove--;
+      }
+
+      for (Path segmentPath : segmentPaths) {
+        segmentPath.toFile().delete();
+      }
+
+      log.trace("Compaction of {} done", segmentPaths);
+    }
+  }
+
 }

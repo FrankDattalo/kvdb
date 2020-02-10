@@ -28,7 +28,7 @@ public class App {
     System.out.println("  /quit - quits the program");
   }
 
-  public static void main(String[] args) throws IOException {
+  public static void main(String[] args) throws IOException, InterruptedException {
     Scanner scanner = new Scanner(System.in);
 
     Database database = null;
@@ -62,8 +62,8 @@ public class App {
           if (line.startsWith("/read")) {
             String key = line.substring("/read".length()).trim();
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            database.read(key.getBytes(), out);
-            System.out.println(new String(out.toByteArray()));
+            boolean found = database.read(key.getBytes(), out);
+            System.out.println(found ? new String(out.toByteArray()) : "<Not Found>");
 
           } else if (line.startsWith("/write")) {
             String rest = line.substring("/write".length()).trim();
