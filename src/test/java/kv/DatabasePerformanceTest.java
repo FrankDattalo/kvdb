@@ -16,13 +16,15 @@ import java.util.UUID;
 public class DatabasePerformanceTest {
 
   private void runMixedPerformanceTest(
-      String dbPath,
+      String description,
       long segmentSize,
       int threadCount,
       long operationsPerThread,
       float readPercent,
       float writePercent,
       float deletePercent) throws IOException, InterruptedException {
+
+    String dbPath = randomPath();
 
     Database database = new Database(dbPath, segmentSize);
 
@@ -67,21 +69,45 @@ public class DatabasePerformanceTest {
 
     database.stop();
 
+    int maxLength = 45;
+
+    System.out.print(description);
+    System.out.print(" ");
+    System.out.println(sep(maxLength - 1 - description.length()));
     display("Elapsed", "%.2fs", elapsed / 1000.0);
     display("Threads", "%s", threadCount);
     display("Ops Per Thread", "%s", operationsPerThread);
+    display("Segment Size", "%s", segmentSize);
     display("Total Reads", "%s/%s (%.2f%%)", totalReads, total, ((double) totalReads) / total);
     display("Total Writes", "%s/%s (%.2f%%)", totalWrites, total, ((double) totalWrites) / total);
     display("Total Deletes", "%s/%s (%.2f%%)", totalDeletes, total, ((double) totalDeletes) / total);
     display("Reads/Second", "%.2f", perSecond(totalReads, elapsed));
     display("Writes/Second", "%.2f", perSecond(totalWrites, elapsed));
     display("Deletes/Second", "%.2f", perSecond(totalDeletes, elapsed));
+    display("Nodes/1K Reads", "%.2f", 1_000 / perSecond(totalReads, elapsed));
+    display("Nodes/1K Writes", "%.2f", 1_000 / perSecond(totalWrites, elapsed));
+    display("Nodes/1K Deletes", "%.2f", 1_000 / perSecond(totalDeletes, elapsed));
+    display("Nodes/1M Reads", "%.2f", 1_000_000 / perSecond(totalReads, elapsed));
+    display("Nodes/1M Writes", "%.2f", 1_000_000 / perSecond(totalWrites, elapsed));
+    display("Nodes/1M Deletes", "%.2f", 1_000_000 / perSecond(totalDeletes, elapsed));
+    display("Nodes/1B Reads", "%.2f", 1_000_000_000 / perSecond(totalReads, elapsed));
+    display("Nodes/1B Writes", "%.2f", 1_000_000_000 / perSecond(totalWrites, elapsed));
+    display("Nodes/1B Deletes", "%.2f", 1_000_000_000 / perSecond(totalDeletes, elapsed));
+    System.out.println(sep(maxLength));
 
     FileUtils.deleteDirectory(new File(dbPath));
   }
 
+  private static String sep(int length) {
+    StringBuilder sb = new StringBuilder();
+    for (int i = 0; i < length; i++) {
+      sb.append('-');
+    }
+    return sb.toString();
+  }
+
   private static void display(String description, String format, Object... args) {
-    System.out.printf("%20s:%30s\n", description, String.format(format, args));
+    System.out.printf("%-20s:%24s\n", description, String.format(format, args));
   }
 
   private double perSecond(long total, long elapsedMillis) {
@@ -90,15 +116,63 @@ public class DatabasePerformanceTest {
   }
 
   @Test
-  public void test1() throws IOException, InterruptedException {
+  public void test80() throws IOException, InterruptedException {
     runMixedPerformanceTest(
-        randomPath(),
+        "80% Reads",
         1000,
         100,
         1000,
         0.8f,
         0.1f,
         0.1f);
+  }
+
+  @Test
+  public void test85() throws IOException, InterruptedException {
+    runMixedPerformanceTest(
+        "85% Reads",
+        1000,
+        100,
+        1000,
+        0.85f,
+        0.10f,
+        0.05f);
+  }
+
+  @Test
+  public void test90() throws IOException, InterruptedException {
+    runMixedPerformanceTest(
+        "90% Reads",
+        1000,
+        100,
+        1000,
+        0.90f,
+        0.05f,
+        0.05f);
+  }
+
+  @Test
+  public void test95() throws IOException, InterruptedException {
+    runMixedPerformanceTest(
+        "95% Reads",
+        1000,
+        100,
+        1000,
+        0.95f,
+        0.025f,
+        0.025f);
+  }
+
+  @Test
+  public void test99() throws IOException, InterruptedException {
+    runMixedPerformanceTest(
+        "99% Reads",
+        1000,
+        100,
+        1000,
+        0.99f,
+        0.005f,
+        0.005f);
   }
 
   private static class PerformanceTestThread extends Thread {
