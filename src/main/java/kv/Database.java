@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.*;
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -11,8 +12,9 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -22,16 +24,14 @@ public class Database {
 
   private final AtomicInteger currentSegmentId = new AtomicInteger(0);
   private final Map<Integer, Segment> segments = Collections.synchronizedMap(new HashMap<>());
-  private final ReentrantLock segmentLock = new ReentrantLock();
+  private final ReentrantReadWriteLock segmentLock = new ReentrantReadWriteLock();
   private final String dbBasePath;
   private final long initialSegmentSize;
 
   // ~100 mb, this should never really be hit
   private static final int MAX_READ_LIMIT = 1000 * 1000 * 100;
 
-  // every .5 seconds
-  private static final int COMPACTION_INTERVAL_MS = 500;
-
+  private Semaphore canCompact = new Semaphore(0);
   private boolean shutdown;
   private Thread compactorThread;
 
@@ -43,7 +43,7 @@ public class Database {
 
   public void start() throws IOException {
 
-    log.trace("Begin startup process");
+    log.debug("Begin startup process");
 
     if (!Files.exists(Paths.get(this.dbBasePath))) {
       log.trace("Db base path does not exist, running first time setup");
@@ -63,70 +63,96 @@ public class Database {
   }
 
   public void stop() throws InterruptedException {
-    log.trace("Stopping database");
+    log.debug("Stopping database");
 
     this.shutdown = true;
 
-    for (Segment seg : this.segments.values()) {
-      try {
-        seg.close();
-      } catch (IOException e) {
-        log.error("Error closing segment", e);
+    try {
+      this.segmentLock.writeLock().lock();
+
+      for (Segment seg : this.segments.values()) {
+        try {
+          seg.close();
+        } catch (IOException e) {
+          log.error("Error closing segment", e);
+        }
       }
+
+    } finally {
+      this.segmentLock.writeLock().unlock();
     }
 
     log.trace("All segments closed");
 
     if (this.compactorThread != null) {
+      this.compactorThread.interrupt();
       this.compactorThread.join();
     }
   }
 
   public boolean read(ByteSlice key, OutputStream out) throws IOException {
 
-    log.trace("read({})", key);
+    log.debug("read({})", key);
 
-    int segmentId = this.currentSegmentId.get();
+    try {
+      this.segmentLock.readLock().lock();
 
-    while (segmentId > 0) {
-      log.trace("Searching segment with id: {}", segmentId);
+      int segmentId = this.currentSegmentId.get();
 
-      Segment seg = this.segments.get(segmentId);
+      while (segmentId > 0) {
+        log.trace("Searching segment with id: {}", segmentId);
 
-      if (seg == null || !seg.contains(key)) {
-        log.trace("Not found in segment: {}", segmentId);
+        Segment seg = this.segments.get(segmentId);
 
-        if (seg != null && seg.isCompacted()) {
-          break;
+        if (seg == null || !seg.contains(key)) {
+          log.trace("Not found in segment: {}", segmentId);
+
+          if (seg != null && seg.isCompacted()) {
+            break;
+          }
+
+          segmentId--;
+          continue;
         }
 
-        segmentId--;
-        continue;
+        return seg.read(key, out);
       }
 
-      return seg.read(key, out);
-    }
+      log.trace("read({}) - not found", key);
 
-    log.trace("read({}) - not found", key);
+    } finally {
+      this.segmentLock.readLock().unlock();
+    }
 
     return false;
   }
 
   public void write(ByteSlice key, InputStream value) throws IOException {
+    log.debug("write({})", key);
 
-    log.trace("write({})", key);
-
-    Segment seg = this.currentSegment();
-    seg.write(key, value);
-    this.checkSegment();
+    withCurrentSegmentForWriting(seg -> seg.write(key, value));
   }
 
   public void delete(ByteSlice key) throws IOException {
-    log.trace("delete({})", key);
+    log.debug("delete({})", key);
 
-    Segment seg = this.currentSegment();
-    seg.delete(key);
-    this.checkSegment();
+    withCurrentSegmentForWriting(seg -> seg.delete(key));
+  }
+
+  public void compact() {
+    this.canCompact.release();
+  }
+
+  private void withCurrentSegmentForWriting(SegmentConsumerWithIOException r) throws IOException {
+    try {
+      this.segmentLock.writeLock().lock();
+      Segment seg = this.currentSegment();
+      r.accept(seg);
+      this.checkSegment();
+
+    } finally {
+      this.segmentLock.writeLock().unlock();
+    }
   }
 
   private void initialSetup() throws IOException {
@@ -157,6 +183,7 @@ public class Database {
       this.segments.put(seg.getId(), seg);
     }
 
+    this.compact();
   }
 
   private static boolean isSegmentFileName(Path path) {
@@ -233,15 +260,13 @@ public class Database {
 
     FileOutputStream fileOutputStream = new FileOutputStream(file, true);
 
-    Segment seg = new Segment(pathAsString, fileOutputStream,
+    return new Segment(pathAsString, fileOutputStream,
         extractSegmentId(path), isCompacted(path), initialSegmentSize);
-
-    return seg;
   }
 
   private void makeNewSegment() throws IOException {
     try {
-      segmentLock.lock();
+      segmentLock.writeLock().lock();
 
       int id = this.currentSegmentId.incrementAndGet();
       Path path = Paths.get(this.dbBasePath, String.format("seg-%d.bin", id));
@@ -250,13 +275,13 @@ public class Database {
       this.segments.put(id, segment);
 
     } finally {
-      segmentLock.unlock();
+      segmentLock.writeLock().unlock();
     }
   }
 
   private void checkSegment() throws IOException {
     try {
-      segmentLock.lock();
+      segmentLock.writeLock().lock();
 
       Segment segment = currentSegment();
 
@@ -264,21 +289,22 @@ public class Database {
         log.trace("Current segment is at capacity, new segment will be created");
         segment.close();
         this.makeNewSegment();
+        this.compact();
       }
 
     } finally {
-      segmentLock.unlock();
+      segmentLock.writeLock().unlock();
     }
   }
 
   private Segment currentSegment() {
     try {
-      segmentLock.lock();
+      segmentLock.readLock().lock();
 
       return this.segments.get(currentSegmentId.get());
 
     } finally {
-      segmentLock.unlock();
+      segmentLock.readLock().unlock();
     }
   }
 
@@ -292,10 +318,14 @@ public class Database {
     public void run() {
       while (!shutdown) {
         try {
-          doCompaction();
-          Thread.sleep(COMPACTION_INTERVAL_MS);
+          canCompact.acquire();
 
-        } catch (Exception e) {
+          doCompaction();
+
+        } catch (InterruptedException | ClosedByInterruptException e) {
+          log.trace("Compaction interrupted", e);
+
+        } catch (IOException e) {
           log.error("Error in compaction", e);
         }
       }
@@ -310,10 +340,11 @@ public class Database {
       segmentPaths = segmentPaths.subList(0, segmentPaths.size() - 1);
 
       if (segmentPaths.size() <= 1) {
+        log.debug("Not compacting, segments eligible for compaction are: {}", segmentPaths);
         return;
       }
 
-      log.trace("Beginning compaction of: {}", segmentPaths);
+      log.debug("Beginning compaction of: {}", segmentPaths);
 
       for (Path segmentPath : segmentPaths) {
         Segment segment = recoverPath(segmentPath);
@@ -346,7 +377,12 @@ public class Database {
 
       segment.close();
 
-      segments.put(segment.getId(), segment);
+      try {
+        segmentLock.writeLock().lock();
+        segments.put(segment.getId(), segment);
+      } finally {
+        segmentLock.writeLock().unlock();
+      }
 
       int toRemove = segment.getId() - 1;
 
@@ -365,8 +401,11 @@ public class Database {
         segmentPath.toFile().delete();
       }
 
-      log.trace("Compaction of {} done", segmentPaths);
+      log.debug("Compaction of {} done", segmentPaths);
     }
   }
 
+  private static interface SegmentConsumerWithIOException {
+    void accept(Segment segment) throws IOException;
+  }
 }

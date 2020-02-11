@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
 public class Segment {
@@ -21,6 +22,7 @@ public class Segment {
   private final int id;
   private final boolean compacted;
   private final long resizeAtBytes;
+  private final ReentrantLock writeLock = new ReentrantLock();
 
   public Segment(
       String filePath, FileOutputStream fileOutputStream,
@@ -46,9 +48,16 @@ public class Segment {
 
     checkWrite();
 
-    long currentOffset = fileOutputStream.getChannel().position();
-    LogFormatter.write(fileOutputStream, key.toStream(), value);
-    put(key, currentOffset);
+    try {
+      writeLock.lock();
+
+      long currentOffset = fileOutputStream.getChannel().position();
+      LogFormatter.write(fileOutputStream, key.toStream(), value);
+      put(key, currentOffset);
+
+    } finally {
+      writeLock.unlock();
+    }
   }
 
   public boolean read(ByteSlice key, OutputStream out) throws IOException {

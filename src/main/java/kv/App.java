@@ -25,6 +25,7 @@ public class App {
     System.out.println("  /write <key> <value> - inserts / updates the given key");
     System.out.println("  /delete <key> - deletes the given key");
     System.out.println("  /debug - prints the database contents");
+    System.out.println("  /compact - attempts to invoke log compaction");
     System.out.println("  /quit - quits the program");
   }
 
@@ -33,11 +34,11 @@ public class App {
 
     Database database = null;
 
-    if (args.length > 2 && args[2].equals("true")) {
+    if (args.length > 2) {
       LoggerContext context = (LoggerContext) LogManager.getContext(false);
       Configuration config = context.getConfiguration();
       LoggerConfig rootConfig = config.getLoggerConfig(LogManager.ROOT_LOGGER_NAME);
-      rootConfig.setLevel(Level.TRACE);
+      rootConfig.setLevel(Level.valueOf(args[2]));
       context.updateLoggers();
     }
 
@@ -84,6 +85,9 @@ public class App {
 
           } else if (line.startsWith("/debug")) {
             System.out.println(database);
+
+          } else if (line.startsWith("/compact")) {
+            database.compact();
 
           } else {
             System.out.println("Invalid command: " + line);
